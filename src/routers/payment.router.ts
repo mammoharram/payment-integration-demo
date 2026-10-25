@@ -2,19 +2,32 @@
 import { Router } from "express";
 import database = require("../config/database");
 import sqlClient = require("mssql/msnodesqlv8");
-import { adaptPaymentEvent, type ExternalPaymentEvent } from "../adapters/payment-adapter";
+import { adaptPaymentEvent } from "../adapters/payment-adapter";
+import { paymentEventSchema } from "../validation/payment.schema";
 
 const router = Router();
 
 
+
 router.post("/", async (req, res) => {
     // 1. Validate the incoming payload at runtime.
+    const validation = paymentEventSchema.safeParse(req.body);
+
+    if (!validation.success) {
+        return res.status(400).json({
+            error: "Invalid payment event",
+            details: validation.error.issues.map((issue) => ({
+                field: issue.path.join("."),
+                message: issue.message,
+            })),
+        });
+    }
+
     // 2. Convert the external event to our internal model.
     let payment;
 
     try {
-        payment = adaptPaymentEvent(req.body as ExternalPaymentEvent);
-        // payment = adaptPaymentEvent(validation.data);
+        payment = adaptPaymentEvent(validation.data);
     } catch (error) {
         return res.status(422).json({
             error: error instanceof Error

@@ -1,5 +1,6 @@
 import express = require("express");
 import database = require("./config/database");
+import paymentRoutes from "./routers/payment.router";
 
 const app = express();
 const port = 3000;
@@ -38,6 +39,8 @@ app.get("/db-health", async (_req, res) => {
     }
 });
 
+// Endpoints
+app.use("/api/payments", paymentRoutes);
 
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);

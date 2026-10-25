@@ -1,0 +1,27 @@
+{
+  "name": "payment-integration-demo",
+  "version": "1.0.0",
+  "description": "Payment Integration backend with AWS Cloud",
+  "license": "ISC",
+  "author": "Mohammad Moharram",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "msnodesqlv8": "^6.0.0",
+    "mssql": "^12.7.11"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/mssql": "^12.3.0",
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

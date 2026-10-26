@@ -1,5 +1,5 @@
-import express = require("express");
-import database = require("./config/database");
+import express from "express";
+import database from "./config/database";
 import paymentRoutes from "./routers/payment.router";
 
 const app = express();

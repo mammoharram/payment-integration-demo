@@ -1,5 +1,5 @@
-import database = require("../config/database");
-import sqlClient = require("mssql/msnodesqlv8");
+import database from "../config/database";
+import sqlClient from "mssql/msnodesqlv8";
 import { Payment } from "../adapters/payment-adapter";
 import { insertPayment, insertProcessedEvent, isProcessedEventExist } from "../repositories/payment.repo";
 

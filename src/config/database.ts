@@ -1,5 +1,5 @@
 import "dotenv/config";
-import sql = require("mssql/msnodesqlv8");
+import sql from "mssql/msnodesqlv8";
 
 const config = {
     server: process.env.DB_SERVER ?? "localhost",
@@ -22,4 +22,4 @@ async function getPool() {
     return sql.connect(config);
 }
 
-export = { getPool };
+export default { getPool };

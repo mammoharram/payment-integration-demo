@@ -1,6 +1,7 @@
 import express from "express";
 import database from "./config/database";
-import paymentRoutes from "./routers/payment.router";
+import { createPaymentRouter } from "./routers/payment.router";
+import { paymentService } from "./manual-di-container"
 
 const app = express();
 const port = 3000;
@@ -40,7 +41,7 @@ app.get("/db-health", async (_req, res) => {
 });
 
 // Endpoints
-app.use("/api/payments", paymentRoutes);
+app.use("/api/payments", createPaymentRouter(paymentService));
 
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);

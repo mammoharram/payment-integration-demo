@@ -1,116 +1,141 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Shared mocks must be created with vi.hoisted because
-// Vitest hoists vi.mock() declarations.
-const mocks = vi.hoisted(() => ({
-    transaction: {
-        begin: vi.fn(),
-        commit: vi.fn(),
-        rollback: vi.fn(),
-    },
-    database: {
-        getPool: vi.fn(),
-    },
-    insertProcessedEvent: vi.fn(),
-    insertPayment: vi.fn(),
-    isProcessedEventExist: vi.fn(),
-}));
+import type { ConnectionPool, Transaction } from "mssql";
+import type { Payment } from "../adapters/payment-adapter";
+import type { IPaymentRepository } from "../repositories/iPayment.repo";
+import type { ITransactionFactory } from "./iTransaction-factory";
+import { PaymentService } from "./payment.service";
 
-vi.mock("mssql/msnodesqlv8", () => ({
-    default: {
-        Transaction: vi.fn(function () {
-            return mocks.transaction;
-        }),
-    },
-}));
+describe("PaymentService", () => {
+    let service: PaymentService;
 
-vi.mock("../config/database", () => ({
-    default: {
-        getPool: mocks.database.getPool,
-    },
-}));
+    let repository: IPaymentRepository;
+    let transactionFactory: ITransactionFactory;
 
-vi.mock("../repositories/payment.repo", () => ({
-    insertProcessedEvent: mocks.insertProcessedEvent,
-    insertPayment: mocks.insertPayment,
-    isProcessedEventExist: mocks.isProcessedEventExist,
-}));
+    let pool: ConnectionPool;
+    let transaction: Transaction;
 
-import { processPayment } from "./payment.service";
+    let getPool: () => Promise<ConnectionPool>;
 
-const payment = {
-    eventId: "evt-1001",
-    paymentId: "pay-5001",
-    amount: 125.5,
-    currency: "USD",
-    status: "COMPLETED" as const,
-};
+    let begin: ReturnType<typeof vi.fn>;
+    let commit: ReturnType<typeof vi.fn>;
+    let rollback: ReturnType<typeof vi.fn>;
 
-describe("processPayment", () => {
+    const payment: Payment = {
+        eventId: "evt-1001",
+        paymentId: "pay-5001",
+        amount: 125.5,
+        currency: "USD",
+        status: "COMPLETED",
+    };
+
     beforeEach(() => {
         vi.clearAllMocks();
 
-        mocks.database.getPool.mockResolvedValue({});
-        mocks.transaction.begin.mockResolvedValue(undefined);
-        mocks.transaction.commit.mockResolvedValue(undefined);
-        mocks.transaction.rollback.mockResolvedValue(undefined);
+        begin = vi.fn().mockResolvedValue(undefined);
+        commit = vi.fn().mockResolvedValue(undefined);
+        rollback = vi.fn().mockResolvedValue(undefined);
 
-        mocks.insertProcessedEvent.mockResolvedValue(undefined);
-        mocks.insertPayment.mockResolvedValue(undefined);
-        mocks.isProcessedEventExist.mockResolvedValue({ recordset: [] });
+        // A fake transaction: no real SQL Server connection.
+        transaction = {
+            begin,
+            commit,
+            rollback,
+        } as unknown as Transaction;
+
+        pool = {} as ConnectionPool;
+
+        getPool = vi.fn<() => Promise<ConnectionPool>>().mockResolvedValue(pool);
+
+        repository = {
+            insertProcessedEvent: vi.fn().mockResolvedValue(undefined),
+            insertPayment: vi.fn().mockResolvedValue(undefined),
+            processedEventExists: vi.fn().mockResolvedValue(false),
+        };
+
+        transactionFactory = {
+            create: vi.fn().mockReturnValue(transaction),
+        };
+
+        service = new PaymentService(
+            repository,
+            getPool,
+            transactionFactory
+        );
     });
 
-    it("commits when both inserts succeed", async () => {
-        const result = await processPayment(payment);
+    it("commits when both database operations succeed", async () => {
+        const result = await service.processPayment(payment);
 
         expect(result).toEqual({ status: "processed" });
 
-        expect(mocks.transaction.begin).toHaveBeenCalledOnce();
-        expect(mocks.insertProcessedEvent).toHaveBeenCalledOnce();
-        expect(mocks.insertPayment).toHaveBeenCalledOnce();
-        expect(mocks.transaction.commit).toHaveBeenCalledOnce();
-        expect(mocks.transaction.rollback).not.toHaveBeenCalled();
+        expect(getPool).toHaveBeenCalledOnce();
+        expect(transactionFactory.create).toHaveBeenCalledWith(pool);
+
+        expect(repository.insertProcessedEvent).toHaveBeenCalledWith(
+            transaction,
+            payment
+        );
+
+        expect(repository.insertPayment).toHaveBeenCalledWith(
+            transaction,
+            payment
+        );
+
+        expect(begin).toHaveBeenCalledOnce();
+        expect(commit).toHaveBeenCalledOnce();
+        expect(rollback).not.toHaveBeenCalled();
     });
 
-    it("rolls back when inserting the payment fails", async () => {
-        mocks.insertPayment.mockRejectedValueOnce(
+    it("rolls back when inserting a payment fails", async () => {
+        vi.mocked(repository.insertPayment).mockRejectedValueOnce(
             new Error("Simulated database failure")
         );
 
-        await expect(processPayment(payment)).rejects.toThrow(
-            "Simulated database failure"
-        );
+        await expect(
+            service.processPayment(payment)
+        ).rejects.toThrow("Simulated database failure");
 
-        expect(mocks.transaction.rollback).toHaveBeenCalledOnce();
-        expect(mocks.transaction.commit).not.toHaveBeenCalled();
+        expect(begin).toHaveBeenCalledOnce();
+        expect(commit).not.toHaveBeenCalled();
+        expect(rollback).toHaveBeenCalledOnce();
     });
 
     it("returns duplicate when the event already exists", async () => {
-        mocks.insertProcessedEvent.mockRejectedValueOnce({
+        vi.mocked(repository.insertProcessedEvent).mockRejectedValueOnce({
             number: 2627,
         });
 
-        mocks.isProcessedEventExist.mockResolvedValueOnce({
-            recordset: [{ EventId: payment.eventId }],
-        });
+        vi.mocked(repository.processedEventExists).mockResolvedValueOnce({
+            recordset: [{}],
+        } as any);
 
-        const result = await processPayment(payment);
+        const result = await service.processPayment(payment);
 
         expect(result).toEqual({ status: "duplicate" });
-        expect(mocks.transaction.rollback).toHaveBeenCalledOnce();
-        expect(mocks.transaction.commit).not.toHaveBeenCalled();
+
+        expect(rollback).toHaveBeenCalledOnce();
+        expect(commit).not.toHaveBeenCalled();
+        expect(repository.processedEventExists).toHaveBeenCalledWith(
+            pool,
+            payment.eventId
+        );
+
+        expect(repository.insertPayment).not.toHaveBeenCalled();
     });
 
-    it("propagates an unrelated database error", async () => {
-        mocks.insertPayment.mockRejectedValueOnce(
+    it("rethrows unrelated database errors", async () => {
+        vi.mocked(repository.insertPayment).mockRejectedValueOnce(
             new Error("Database unavailable")
         );
 
-        await expect(processPayment(payment)).rejects.toThrow(
-            "Database unavailable"
-        );
+        await expect(
+            service.processPayment(payment)
+        ).rejects.toThrow("Database unavailable");
 
-        expect(mocks.transaction.rollback).toHaveBeenCalledOnce();
+        expect(rollback).toHaveBeenCalledOnce();
+        expect(commit).not.toHaveBeenCalled();
+        expect(repository.processedEventExists).not.toHaveBeenCalled();
     });
 });

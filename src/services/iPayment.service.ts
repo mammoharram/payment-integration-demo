@@ -1,5 +1,5 @@
 
-import type { Payment } from "../adapters/payment-adapter";
+import type { PaymentEvent } from "../adapters/payment-adapter";
 
 export type ProcessPaymentResult =
     | { status: "processed" }
@@ -7,6 +7,6 @@ export type ProcessPaymentResult =
 
 export interface IPaymentService {
     processPayment(
-        payment: Payment
+        event: PaymentEvent
     ): Promise<ProcessPaymentResult>;
 }

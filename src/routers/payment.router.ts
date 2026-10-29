@@ -1,11 +1,11 @@
 
 import { Router } from "express";
-import type { IPaymentService } from "../services/iPayment.service";
 import { paymentEventSchema } from "../validation/payment.schema";
 import { adaptPaymentEvent } from "../adapters/payment-adapter";
+import type { IEventQueue } from "../messaging/IEventQueue";
 
 
-export function createPaymentRouter(paymentService: IPaymentService) {
+export function createPaymentRouter(eventQueue: IEventQueue) {
     const router = Router();
 
     router.post("/", async (req, res) => {
@@ -23,10 +23,10 @@ export function createPaymentRouter(paymentService: IPaymentService) {
         }
 
         // 2. Convert the external event to our internal model.
-        let payment;
+        let event;
 
         try {
-            payment = adaptPaymentEvent(validation.data);
+            event = adaptPaymentEvent(validation.data);
         } catch (error) {
             return res.status(422).json({
                 error: error instanceof Error
@@ -36,25 +36,19 @@ export function createPaymentRouter(paymentService: IPaymentService) {
         }
 
         try {
-            const result = await paymentService.processPayment(payment);
-            if (result.status === "duplicate") {
-                return res.status(200).json({
-                    status: "duplicate",
-                    eventId: payment.eventId,
-                    message: "This event has already been processed"
-                });
-            }
-            return res.status(200).json({
-                status: "processed",
-                eventId: payment.eventId,
-                paymentId: payment.paymentId,
+            await eventQueue.publish(event);
+
+            return res.status(202).json({
+                status: "accepted",
+                eventId: event.eventId,
             });
 
         } catch (error) {
             console.error("Payment processing failed:", error);
 
             return res.status(500).json({
-                error: "Payment processing failed",
+                error: "Failed to queue payment event",
+                details: (error instanceof Error ? error.message : "Unknown error"),
             });
         }
     });

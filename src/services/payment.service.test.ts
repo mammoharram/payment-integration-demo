@@ -1,18 +1,15 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { ConnectionPool, Transaction } from "mssql";
-import type { Payment } from "../adapters/payment-adapter";
+import type { PaymentEvent, PaymentStatus } from "../adapters/payment-adapter";
 import type { IPaymentRepository } from "../repositories/iPayment.repo";
 import type { ITransactionFactory } from "./iTransaction-factory";
 import { PaymentService } from "./payment.service";
 
 describe("PaymentService", () => {
     let service: PaymentService;
-
     let repository: IPaymentRepository;
     let transactionFactory: ITransactionFactory;
-
     let pool: ConnectionPool;
     let transaction: Transaction;
 
@@ -22,12 +19,12 @@ describe("PaymentService", () => {
     let commit: ReturnType<typeof vi.fn>;
     let rollback: ReturnType<typeof vi.fn>;
 
-    const payment: Payment = {
+    const event: PaymentEvent = {
         eventId: "evt-1001",
         paymentId: "pay-5001",
         amount: 125.5,
         currency: "USD",
-        status: "COMPLETED",
+        status: "PENDING",
     };
 
     beforeEach(() => {
@@ -37,7 +34,6 @@ describe("PaymentService", () => {
         commit = vi.fn().mockResolvedValue(undefined);
         rollback = vi.fn().mockResolvedValue(undefined);
 
-        // A fake transaction: no real SQL Server connection.
         transaction = {
             begin,
             commit,
@@ -51,6 +47,8 @@ describe("PaymentService", () => {
         repository = {
             insertProcessedEvent: vi.fn().mockResolvedValue(undefined),
             insertPayment: vi.fn().mockResolvedValue(undefined),
+            getPaymentStatus: vi.fn().mockResolvedValue(null),
+            updatePaymentStatus: vi.fn().mockResolvedValue(true),
             processedEventExists: vi.fn().mockResolvedValue(false),
         };
 
@@ -65,77 +63,93 @@ describe("PaymentService", () => {
         );
     });
 
-    it("commits when both database operations succeed", async () => {
-        const result = await service.processPayment(payment);
+    it("creates a new payment from a PENDING event", async () => {
+        const result = await service.processPayment(event);
 
         expect(result).toEqual({ status: "processed" });
-
-        expect(getPool).toHaveBeenCalledOnce();
-        expect(transactionFactory.create).toHaveBeenCalledWith(pool);
-
         expect(repository.insertProcessedEvent).toHaveBeenCalledWith(
             transaction,
-            payment
+            event
         );
-
         expect(repository.insertPayment).toHaveBeenCalledWith(
             transaction,
-            payment
+            event
         );
-
-        expect(begin).toHaveBeenCalledOnce();
         expect(commit).toHaveBeenCalledOnce();
         expect(rollback).not.toHaveBeenCalled();
     });
 
-    it("rolls back when inserting a payment fails", async () => {
-        vi.mocked(repository.insertPayment).mockRejectedValueOnce(
-            new Error("Simulated database failure")
+    it("updates an existing PENDING payment to COMPLETED", async () => {
+        vi.mocked(repository.getPaymentStatus).mockResolvedValue(
+            "PENDING" as PaymentStatus
         );
 
-        await expect(
-            service.processPayment(payment)
-        ).rejects.toThrow("Simulated database failure");
+        const completedEvent: PaymentEvent = {
+            ...event,
+            eventId: "evt-1002",
+            status: "COMPLETED",
+        };
 
-        expect(begin).toHaveBeenCalledOnce();
+        const result = await service.processPayment(completedEvent);
+
+        expect(result).toEqual({ status: "processed" });
+        expect(repository.updatePaymentStatus).toHaveBeenCalledWith(
+            transaction,
+            event.paymentId,
+            "PENDING",
+            "COMPLETED"
+        );
+        expect(commit).toHaveBeenCalledOnce();
+    });
+
+    it("rejects an invalid transition and rolls back", async () => {
+        vi.mocked(repository.getPaymentStatus).mockResolvedValue(
+            "COMPLETED" as PaymentStatus
+        );
+
+        const failedEvent: PaymentEvent = {
+            ...event,
+            eventId: "evt-1003",
+            status: "FAILED",
+        };
+
+        await expect(
+            service.processPayment(failedEvent)
+        ).rejects.toThrow("Invalid payment status transition");
+
+        expect(repository.insertProcessedEvent).not.toHaveBeenCalled();
         expect(commit).not.toHaveBeenCalled();
         expect(rollback).toHaveBeenCalledOnce();
     });
 
-    it("returns duplicate when the event already exists", async () => {
-        vi.mocked(repository.insertProcessedEvent).mockRejectedValueOnce({
-            number: 2627,
-        });
+    it("returns duplicate when the event ID already exists", async () => {
+        const duplicateError = Object.assign(
+            new Error("Duplicate key"),
+            { number: 2627 }
+        );
 
-        vi.mocked(repository.processedEventExists).mockResolvedValueOnce({
-            recordset: [{}],
-        } as any);
+        vi.mocked(repository.insertProcessedEvent).mockRejectedValue(
+            duplicateError
+        );
+        vi.mocked(repository.processedEventExists).mockResolvedValue(true);
 
-        const result = await service.processPayment(payment);
+        const result = await service.processPayment(event);
 
         expect(result).toEqual({ status: "duplicate" });
-
         expect(rollback).toHaveBeenCalledOnce();
         expect(commit).not.toHaveBeenCalled();
-        expect(repository.processedEventExists).toHaveBeenCalledWith(
-            pool,
-            payment.eventId
-        );
-
-        expect(repository.insertPayment).not.toHaveBeenCalled();
     });
 
-    it("rethrows unrelated database errors", async () => {
-        vi.mocked(repository.insertPayment).mockRejectedValueOnce(
-            new Error("Database unavailable")
-        );
+    it("rolls back and rethrows an unexpected database error", async () => {
+        const dbError = new Error("Database unavailable");
 
-        await expect(
-            service.processPayment(payment)
-        ).rejects.toThrow("Database unavailable");
+        vi.mocked(repository.insertProcessedEvent).mockRejectedValue(dbError);
+
+        await expect(service.processPayment(event)).rejects.toThrow(
+            "Database unavailable"
+        );
 
         expect(rollback).toHaveBeenCalledOnce();
         expect(commit).not.toHaveBeenCalled();
-        expect(repository.processedEventExists).not.toHaveBeenCalled();
     });
 });

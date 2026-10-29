@@ -1,16 +1,19 @@
 import { ValidatedPaymentEvent } from "../validation/payment.schema";
 
 export interface Payment {
-    eventId: string;
     paymentId: string;
     amount: number;
     currency: string;
     status: PaymentStatus;
 }
 
+export interface PaymentEvent extends Payment {
+    eventId: string;
+    // paymentId, amount, currency, and status are inherited from Payment
+}
 export function adaptPaymentEvent(
     event: ValidatedPaymentEvent
-): Payment {
+): PaymentEvent {
     const status = event.status.toUpperCase();
 
     if (!["PENDING", "COMPLETED", "FAILED"].includes(status)) {

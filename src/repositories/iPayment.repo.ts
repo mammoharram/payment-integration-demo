@@ -1,20 +1,33 @@
 
 import type { ConnectionPool, IResult, Transaction } from "mssql";
-import type { Payment } from "../adapters/payment-adapter";
+import type { PaymentEvent, PaymentStatus, Payment } from "../adapters/payment-adapter";
 
 export interface IPaymentRepository {
     insertProcessedEvent(
         transaction: Transaction,
-        payment: Payment
+        event: PaymentEvent
     ): Promise<void>;
 
     insertPayment(
         transaction: Transaction,
-        payment: Payment
+        event: PaymentEvent
     ): Promise<void>;
 
     processedEventExists(
         pool: ConnectionPool,
         eventId: string
-    ): Promise<IResult<any>>;
+    ): Promise<boolean>;
+
+    getPaymentStatus(
+        transaction: Transaction,
+        paymentId: string
+    ): Promise<PaymentStatus | null>;
+
+    // Update the status only if the current status matches expectations.
+    updatePaymentStatus(
+        transaction: Transaction,
+        paymentId: string,
+        expectedStatus: PaymentStatus,
+        nextStatus: PaymentStatus
+    ): Promise<boolean>;
 }

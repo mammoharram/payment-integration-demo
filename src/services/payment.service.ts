@@ -2,7 +2,7 @@ import { ConnectionPool } from "mssql";
 import type { ITransactionFactory } from "./iTransaction-factory";
 import { IPaymentRepository } from "../repositories/iPayment.repo";
 import { IPaymentService, ProcessPaymentResult } from "./iPayment.service";
-import { Payment } from "../adapters/payment-adapter";
+import { PaymentEvent, PaymentStatus } from "../adapters/payment-adapter";
 
 export class PaymentService implements IPaymentService {
     constructor(
@@ -11,7 +11,7 @@ export class PaymentService implements IPaymentService {
         private readonly transactionFactory: ITransactionFactory,
     ) { }
 
-    async processPayment(payment: Payment): Promise<ProcessPaymentResult> {
+    async processPayment(event: PaymentEvent): Promise<ProcessPaymentResult> {
         const pool = await this.getPool();
 
         const transaction = this.transactionFactory.create(pool);
@@ -19,15 +19,43 @@ export class PaymentService implements IPaymentService {
         try {
             await transaction.begin();
 
+            // 1. Read the payment's current status.
+            const currentStatus = await this.paymentRepository.getPaymentStatus(transaction, event.paymentId);
+
+            // 2. Validate the event before recording it.
+            if (currentStatus === null) {
+                if (event.status !== "PENDING") {
+                    throw new Error(`A new payment must start as PENDING. Received: ${event.status}`);
+                }
+            } else if (!this.canTransition(currentStatus, event.status)) {
+                throw new Error(`Invalid payment status transition: ${currentStatus} -> ${event.status}`);
+            }
+
+
             // Record the event first. EventId's primary key
             // prevents the same event from being processed twice.
-            await this.paymentRepository.insertProcessedEvent(transaction, payment);
+            await this.paymentRepository.insertProcessedEvent(transaction, event);
 
-            // Insert the payment
-            await this.paymentRepository.insertPayment(transaction, payment);
+            // 4. Create the payment or update its current status.
+            if (currentStatus === null) {
+                await this.paymentRepository.insertPayment(transaction, event);
+            } else {
+                const updated = await this.paymentRepository.updatePaymentStatus(
+                    transaction,
+                    event.paymentId,
+                    currentStatus,
+                    event.status
+                );
+
+                if (!updated) {
+                    throw new Error(
+                        "Payment status changed unexpectedly. Please retry the event."
+                    );
+                }
+            }
 
             await transaction.commit();
-            return { status: "processed" }
+            return { status: "processed" };
 
         } catch (error) {
             // If either insert fails, undo the transaction.
@@ -43,9 +71,9 @@ export class PaymentService implements IPaymentService {
             if (dbError.number === 2627 || dbError.number === 2601) {
                 // Distinguish a repeated event from a different event
                 // that happens to reuse an existing PaymentId.
-                const existingEvent = await this.paymentRepository.processedEventExists(pool, payment.eventId);
+                const existingEvent = await this.paymentRepository.processedEventExists(pool, event.eventId);
 
-                if (existingEvent.recordset.length > 0) {
+                if (existingEvent) {
                     return { status: "duplicate" };
                 }
             }
@@ -53,5 +81,13 @@ export class PaymentService implements IPaymentService {
             throw error;
         }
     }
+
+    canTransition(current: PaymentStatus, next: PaymentStatus): boolean {
+        if (current === "PENDING") {
+            return next === "COMPLETED" || next === "FAILED";
+        }
+        return false;
+    }
+
 }
 
